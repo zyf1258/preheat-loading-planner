@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>预热炉排炉</title>
+<style>
+:root{--ink:#172b38;--muted:#60727e;--line:#d6e1e6;--blue:#0c6b98;--bg:#f3f6f7;--paper:#fff;--amber:#b56e10}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px "Microsoft YaHei",sans-serif}header{background:#17394f;color:white;padding:18px 28px}header strong{font-size:20px}header span{display:block;font-size:12px;margin-top:4px;color:#c7d8df}main{max-width:1480px;margin:20px auto;padding:0 18px}.workflow{display:grid;grid-template-columns:1fr 310px;gap:16px}.panel{background:var(--paper);border:1px solid var(--line);border-radius:6px;padding:16px}h2{font-size:15px;margin:0 0 12px}label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}input,select{width:100%;height:38px;padding:7px 9px;border:1px solid #becdd5;border-radius:4px;background:#fff}button{height:38px;padding:0 15px;border:0;border-radius:4px;background:var(--blue);color:#fff;font-weight:bold;cursor:pointer}button.secondary{background:#ecf2f4;color:#294c5c;border:1px solid #cad8de}.import{display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:12px;align-items:end}.status{margin-top:12px;padding:10px 12px;background:#edf5f8;border-left:3px solid var(--blue);color:#245c72}.length-form{display:grid;gap:8px}.hint,.remembered{font-size:12px;line-height:1.55;color:var(--muted)}.remembered{color:#08785e;margin-top:10px}.summary{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:16px 0}.metric{padding:14px;background:white;border:1px solid var(--line);border-radius:6px}.metric span{font-size:12px;color:var(--muted)}.metric b{display:block;font-size:28px;margin-top:5px}.furnaces{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:12px}.furnace-head{display:flex;justify-content:space-between;align-items:baseline}.furnace-head h2{margin:0}.meta{font-size:11px;color:var(--muted);margin:7px 0 12px}.columns{height:165px;display:flex;align-items:end;gap:7px;padding:0 4px;border-bottom:1px solid #aebfc9}.column{flex:1;min-width:18px;position:relative;background:#cae5ee}.column.ring{background:#f4d79e}.column span{position:absolute;left:0;top:-18px;width:100%;font-size:10px;text-align:center;color:#526976}.items{margin-top:12px;max-height:210px;overflow:auto;border-top:1px solid #edf2f4}.item{display:grid;grid-template-columns:1fr auto;align-items:center;gap:7px;padding:7px 0;border-bottom:1px solid #edf2f4;font-size:11px}.item[draggable=true]{cursor:grab}.item small{display:block;margin-top:2px;color:var(--muted)}.move{height:25px;padding:0 7px;font-size:11px;background:#edf4f6;color:#15536f;border:1px solid #c7dce4}.virtual{border:2px dashed var(--amber);background:#fffaf1}.virtual .columns{display:none}.drop-target{outline:3px solid var(--blue);outline-offset:2px}.hidden{display:none}.issue{margin-top:16px}.issue li{margin:5px 0;color:#a24330}dialog{border:0;border-radius:6px;padding:0;width:min(420px,calc(100% - 30px));box-shadow:0 16px 44px #0004}dialog::backdrop{background:#13273166}.dialog-body{padding:18px}.dialog-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}@media(max-width:860px){.workflow,.import{grid-template-columns:1fr}}@media(max-width:480px){.summary{grid-template-columns:1fr}}
+</style></head><body><header><strong>预热炉排炉</strong><span>当天计划导入、长度记忆、拖拽换炉与约束校验</span></header><main>
+<div class="workflow"><section class="panel"><h2>生成当天排炉</h2><div class="import"><div><label>当天生产计划</label><input id="plan" type="file" accept=".xlsx"></div><div><label>MES 棒料登记表（首次或有新料时导入）</label><input id="billet" type="file" accept=".xlsx"></div><div><label>已导出的装炉图</label><input id="loadingMap" type="file" accept=".xlsx"></div><button id="runButton">生成排炉</button></div><div class="dialog-actions"><button id="importLoadingMapButton" type="button" class="secondary">导入排炉图</button></div><div id="feedback" class="status">生产计划 E 列“数量”是唯一数量来源。将棒料拖到目标炉即可手动调整。</div></section><aside class="panel"><h2>手动补充棒料长度</h2><div class="length-form"><div><label>物料编码</label><input id="lengthCode" placeholder="例如 F3.6061.0991"></div><div><label>棒料长度（mm）</label><input id="lengthValue" inputmode="numeric" placeholder="例如 1780"></div><button id="saveLength">记住长度</button></div><div class="remembered" id="remembered">正在读取…</div><p class="hint">补充后重新生成排炉即可使用，不需要再次导入 MES 表。</p></aside></div>
+<section id="summary" class="summary hidden"><div class="metric"><span>计划数量</span><b id="requested">0</b></div><div class="metric"><span>已装入实体炉</span><b id="placed">0</b></div><div class="metric"><span>虚拟炉 / 未分配</span><b id="unassigned">0</b></div></section><section id="furnaces" class="furnaces"></section><section id="issues" class="panel issue hidden"><h2>虚拟炉内物料</h2><ul id="issueList"></ul></section></main>
+<dialog id="moveDialog"><div class="dialog-body"><h2>手动调整炉位</h2><p id="moveDescription"></p><label>目标炉号</label><select id="targetFurnace"></select><div class="dialog-actions"><button class="secondary" id="cancelMove">取消</button><button id="confirmMove">确认换炉</button></div></div></dialog>
+<script>
+let currentResult=null,pendingMove=null;const $=id=>document.getElementById(id),esc=x=>String(x??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+async function refreshMemory(){try{let d=await fetch('/api/billet-lengths').then(r=>r.json());$('remembered').textContent=`已记住 ${Object.keys(d.lengths).length} 个物料编码的棒料长度`;}catch{$('remembered').textContent='无法读取长度记忆';}}
+async function run(){let p=$('plan').files[0],b=$('billet').files[0];if(!p){$('feedback').textContent='请选择当天生产计划。';return}let f=new FormData();f.append('plan_file',p);if(b)f.append('billet_file',b);$('feedback').textContent='正在生成排炉…';try{let r=await fetch('/api/loading-plans',{method:'POST',body:f}),d=await r.json();if(!r.ok||!d.ok)throw Error(d.message);currentResult=d.result;render();$('feedback').textContent=`排炉完成：已使用 ${d.remembered_lengths} 条长度记忆。`;refreshMemory()}catch(e){$('feedback').textContent=e.message}}
+async function importLoadingMap(){let file=$('loadingMap').files[0];if(!file){$('feedback').textContent='请选择已导出的装炉图。';return}let form=new FormData();form.append('loading_map_file',file);$('feedback').textContent='正在读取装炉图并恢复排炉…';try{let r=await fetch('/api/loading-plans/import',{method:'POST',body:form}),d=await r.json();if(!r.ok||!d.ok)throw Error(d.message);currentResult=d.result;render();$('feedback').textContent=`装炉图导入完成：已恢复 ${d.imported_items} 根工件，可继续调整后导出。`}catch(e){$('feedback').textContent=`导入失败：${e.message}`}}
+async function saveLength(){let code=$('lengthCode').value.trim(),length_mm=Number($('lengthValue').value);try{let r=await fetch('/api/billet-lengths',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code,length_mm})}),d=await r.json();if(!r.ok||!d.ok)throw Error(d.message);$('feedback').textContent=`已记住 ${d.code} 的长度：${d.length_mm}mm。`;$('lengthCode').value='';$('lengthValue').value='';refreshMemory()}catch(e){$('feedback').textContent=e.message}}
+function render(){let r=currentResult;$('summary').classList.remove('hidden');$('requested').textContent=r.total_requested;$('placed').textContent=r.total_placed;$('unassigned').textContent=r.total_unassigned;$('furnaces').innerHTML=Object.entries(r.furnaces).map(([id,f])=>{let v=f.spec.is_virtual,limit=f.spec.height_mm||1,list=f.columns.flatMap((c,ci)=>c.items.map((x,xi)=>`<div class="item" draggable="true" data-furnace="${id}" data-column="${ci}" data-item="${xi}"><div>列${ci+1} · ${esc(x.code)} · ${x.height_mm||'待补'}mm<small>${esc(x.alloy)} · ${esc(x.type)}</small></div><button class="move" data-furnace="${id}" data-column="${ci}" data-item="${xi}">换炉</button></div>`)).join('')||'<div class="item">暂无装入物料</div>';let name=id==='VIRTUAL'?'虚拟炉':id==='VIRTUAL_Z'?'虚拟炉 Z':id;let note=f.spec.manual_only?'无限容量，仅手动调整，自动排炉优先级 0':v?'无限容量，承接未分配料，排产优先级最低':`${f.spec.slots} 列 · 炉高上限 ${f.spec.height_mm}mm`;return `<article class="panel ${v?'virtual':''}" data-target="${id}"><div class="furnace-head"><h2>${name}</h2><b>${f.total} 根</b></div><div class="meta">${esc(f.spec.role)} · ${note}</div>${v?'':`<div class="columns">${f.columns.map(c=>`<div class="column ${f.spec.is_ring?'ring':''}" style="height:${Math.max(3,c.height_mm/limit*100)}%"><span>${c.height_mm}mm</span></div>`).join('')}</div>`}<div class="items">${list}</div></article>`}).join('');document.querySelectorAll('.move').forEach(b=>b.onclick=()=>openMove(b.dataset));document.querySelectorAll('.item[draggable=true]').forEach(i=>i.ondragstart=e=>e.dataTransfer.setData('text/plain',JSON.stringify(i.dataset)));document.querySelectorAll('[data-target]').forEach(t=>{t.ondragover=e=>{e.preventDefault();t.classList.add('drop-target')};t.ondragleave=()=>t.classList.remove('drop-target');t.ondrop=e=>{e.preventDefault();t.classList.remove('drop-target');let s=JSON.parse(e.dataTransfer.getData('text/plain'));if(s.furnace!==t.dataset.target)move(s,t.dataset.target)}});let u=r.unassigned||[];$('issues').classList.toggle('hidden',!u.length);$('issueList').innerHTML=u.map(x=>`<li>${esc(x.code)}：${esc(x.reason)}</li>`).join('')}
+function openMove(d){let x=currentResult.furnaces[d.furnace].columns[d.column].items[d.item];pendingMove=d;$('moveDescription').textContent=`${x.code}（${x.height_mm||'待补'}mm）目前在 ${d.furnace}。`;$('targetFurnace').innerHTML=Object.keys(currentResult.furnaces).filter(id=>id!==d.furnace).map(id=>`<option value="${id}">${id==='VIRTUAL'?'虚拟炉':id}</option>`).join('');$('moveDialog').showModal()}
+async function move(s,target){try{let r=await fetch('/api/loading-plans/move',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({result:currentResult,source_furnace:s.furnace,source_column:Number(s.column),item_index:Number(s.item),target_furnace:target})}),d=await r.json();if(!r.ok||!d.ok)throw Error(d.message);currentResult=d.result;render();$('moveDialog').close();$('feedback').textContent='已完成换炉，并通过炉高与合金校验。'}catch(e){$('feedback').textContent=`未换炉：${e.message}`}}
+$('runButton').onclick=run;$('importLoadingMapButton').onclick=importLoadingMap;$('saveLength').onclick=saveLength;$('confirmMove').onclick=()=>pendingMove&&move(pendingMove,$('targetFurnace').value);$('cancelMove').onclick=()=>$('moveDialog').close();refreshMemory();
+</script>
+<script>
+(() => {
+  const selectedForBulk = new Map();
+  const originalRender = render;
+  const bulkId = 'bulkMovePanel';
+
+  document.head.insertAdjacentHTML('beforeend', `<style>
+    #${bulkId}{display:flex;align-items:center;justify-content:space-between;margin:0 0 16px}
+    .bulk-checkbox{width:16px;height:16px;margin:0;cursor:pointer}
+    .select-furnace{height:26px;padding:0 8px;font-size:11px;background:#edf4f6;color:#15536f;border:1px solid #c7dce4}
+    .item{grid-template-columns:20px 1fr auto}
+  </style>`);
+
+  function key(data) {
+    return `${data.furnace}|${data.column}|${data.item}`;
+  }
+
+  function updatePanel() {
+    const panel = document.getElementById(bulkId);
+    if (!panel) return;
+    panel.querySelector('span').textContent = `\u5df2\u9009\u62e9 ${selectedForBulk.size} \u6839\u68d2\u6599`;
+    panel.hidden = selectedForBulk.size === 0;
+  }
+
+  function furnaceItems(card) {
+    return [...card.querySelectorAll('.item[draggable="true"]')].map(item => ({
+      furnace: item.dataset.furnace, column: item.dataset.column, item: item.dataset.item
+    }));
+  }
+
+  function updateFurnaceButton(card) {
+    const button = card.querySelector('.select-furnace');
+    if (!button) return;
+    const items = furnaceItems(card);
+    button.textContent = items.length && items.every(item => selectedForBulk.has(key(item)))
+      ? '\u53d6\u6d88\u672c\u7089\u5168\u9009' : '\u5168\u9009\u672c\u7089';
+  }
+
+  function enhanceBulkSelection() {
+    let panel = document.getElementById(bulkId);
+    if (!panel) {
+      panel = document.createElement('section');
+      panel.id = bulkId;
+      panel.className = 'panel';
+      panel.innerHTML = '<span></span><button type="button">\u6279\u91cf\u6362\u7089</button>';
+      document.getElementById('furnaces').before(panel);
+      panel.querySelector('button').onclick = openBulkDialog;
+    }
+    document.querySelectorAll('.item[draggable="true"]').forEach(item => {
+      const data = {furnace: item.dataset.furnace, column: item.dataset.column, item: item.dataset.item};
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.className = 'bulk-checkbox';
+      checkbox.checked = selectedForBulk.has(key(data));
+      checkbox.onclick = event => event.stopPropagation();
+      checkbox.onchange = () => {
+        if (checkbox.checked) selectedForBulk.set(key(data), data);
+        else selectedForBulk.delete(key(data));
+        updatePanel();
+        updateFurnaceButton(item.closest('article'));
+      };
+      item.prepend(checkbox);
+    });
+    document.querySelectorAll('article[data-target]').forEach(card => {
+      const items = furnaceItems(card);
+      if (!items.length) return;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'select-furnace';
+      button.onclick = () => {
+        const selectAll = !items.every(item => selectedForBulk.has(key(item)));
+        items.forEach(item => {
+          if (selectAll) selectedForBulk.set(key(item), item);
+          else selectedForBulk.delete(key(item));
+        });
+        card.querySelectorAll('.bulk-checkbox').forEach(box => { box.checked = selectAll; });
+        updatePanel();
+        updateFurnaceButton(card);
+      };
+      card.querySelector('.furnace-head').append(button);
+      updateFurnaceButton(card);
+    });
+    updatePanel();
+  }
+
+  function openBulkDialog() {
+    if (!selectedForBulk.size) return;
+    let dialog = document.getElementById('bulkMoveDialog');
+    if (!dialog) {
+      dialog = document.createElement('dialog');
+      dialog.id = 'bulkMoveDialog';
+      dialog.innerHTML = `<div class="dialog-body"><h2>\u6279\u91cf\u6362\u7089</h2><p id="bulkMoveDescription"></p><p id="bulkMoveStatus" style="display:none;margin:8px 0;padding:8px;background:#fff2f0;color:#9b3b2e"></p><label>\u76ee\u6807\u7089\u53f7</label><select id="bulkMoveTarget"></select><div class="dialog-actions"><button class="secondary" type="button">\u53d6\u6d88</button><button type="button">\u786e\u8ba4\u6279\u91cf\u6362\u7089</button></div></div>`;
+      document.body.append(dialog);
+      dialog.querySelector('.secondary').onclick = () => dialog.close();
+      dialog.querySelectorAll('button')[1].onclick = submitBulkMove;
+    }
+    document.getElementById('bulkMoveDescription').textContent = `\u5c06 ${selectedForBulk.size} \u6839\u68d2\u6599\u7edf\u4e00\u6362\u5165\u4e00\u53f0\u7089\u3002\u4efb\u4e00\u6839\u4e0d\u7b26\u5408\u7ea6\u675f\u65f6\uff0c\u672c\u6b21\u6279\u91cf\u64cd\u4f5c\u4e0d\u4f1a\u751f\u6548\u3002`;
+    document.getElementById('bulkMoveStatus').style.display = 'none';
+    document.getElementById('bulkMoveTarget').innerHTML = Object.keys(currentResult.furnaces)
+      .map(id => `<option value="${id}">${id === 'VIRTUAL' ? '\u865a\u62df\u7089' : id === 'VIRTUAL_Z' ? '\u865a\u62df\u7089 Z' : id}</option>`).join('');
+    dialog.showModal();
+  }
+
+  async function submitBulkMove() {
+    const target = document.getElementById('bulkMoveTarget').value;
+    const moves = [...selectedForBulk.values()].filter(move => move.furnace !== target);
+    const status = document.getElementById('bulkMoveStatus');
+    if (!moves.length) { status.textContent = '\u9009\u4e2d\u68d2\u6599\u5df2\u5728\u76ee\u6807\u7089\u3002'; status.style.display = 'block'; return; }
+    status.textContent = '\u6b63\u5728\u6821\u9a8c\u6240\u6709\u68d2\u6599\u7684\u7089\u9ad8\u4e0e\u5bb9\u91cf\u2026';
+    status.style.cssText = 'display:block;margin:8px 0;padding:8px;background:#edf5f8;color:#245c72';
+    try {
+      const response = await fetch('/api/loading-plans/batch-move', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({result: currentResult, moves, target_furnace: target})
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw Error(data.message || '\u6279\u91cf\u6362\u7089\u5931\u8d25');
+      currentResult = data.result;
+      selectedForBulk.clear();
+      render();
+      document.getElementById('bulkMoveDialog').close();
+      $('feedback').textContent = `\u5df2\u6279\u91cf\u6362\u7089 ${data.moved} \u6839\uff0c\u5df2\u5b8c\u6210\u7ea6\u675f\u6821\u9a8c\u3002`;
+    } catch (error) {
+      $('feedback').textContent = `\u6279\u91cf\u6362\u7089\u672a\u6267\u884c\uff1a${error.message}`;
+      status.textContent = `\u65e0\u6cd5\u6279\u91cf\u6362\u7089\uff1a${error.message}`;
+      status.style.cssText = 'display:block;margin:8px 0;padding:8px;background:#fff2f0;color:#9b3b2e';
+    }
+  }
+
+  const originalMove = move;
+  window.move = async function(source, target) {
+    selectedForBulk.clear();
+    await originalMove(source, target);
+  };
+
+  window.render = function() {
+    originalRender();
+    enhanceBulkSelection();
+  };
+})();
+</script>
+<script>
+(() => {
+  function updateColumnChoices(furnaceId) {
+    const select = document.getElementById('targetColumnTuning');
+    const columns = currentResult.furnaces[furnaceId].columns;
+    select.dataset.furnace = furnaceId;
+    select.innerHTML = columns.map((column, index) =>
+      `<option value="${index}">\u7b2c ${index + 1} \u5217\uff08\u5f53\u524d ${column.height_mm}mm\uff09</option>`
+    ).join('');
+  }
+
+  window.openMove = function(data) {
+    const source = currentResult.furnaces[data.furnace];
+    const item = source.columns[data.column].items[data.item];
+    pendingMove = data;
+    $('moveDescription').textContent = `${item.code}\uff08${item.height_mm || '\u5f85\u8865'}mm\uff09\u76ee\u524d\u5728 ${data.furnace} \u7089\u7b2c ${Number(data.column) + 1} \u5217\u3002`;
+    $('targetFurnace').innerHTML = Object.keys(currentResult.furnaces)
+      .filter(id => id !== data.furnace)
+      .map(id => `<option value="${id}">${id === 'VIRTUAL' ? '\u865a\u62df\u7089' : id === 'VIRTUAL_Z' ? '\u865a\u62df\u7089 Z' : id}</option>`).join('');
+    let columnSelect = document.getElementById('targetColumnTuning');
+    if (!columnSelect) {
+      $('targetFurnace').insertAdjacentHTML('afterend', '<label for="targetColumnTuning">\u76ee\u6807\u5217</label><select id="targetColumnTuning"></select>');
+      columnSelect = document.getElementById('targetColumnTuning');
+    }
+    updateColumnChoices($('targetFurnace').value);
+    $('targetFurnace').onchange = () => updateColumnChoices($('targetFurnace').value);
+    $('moveDialog').showModal();
+  };
+
+  window.move = async function(source, target) {
+    const columnSelect = document.getElementById('targetColumnTuning');
+    const targetColumn = columnSelect && columnSelect.dataset.furnace === target ? Number(columnSelect.value) : null;
+    try {
+      const response = await fetch('/api/loading-plans/move', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          result: currentResult, source_furnace: source.furnace,
+          source_column: Number(source.column), item_index: Number(source.item),
+          target_furnace: target, target_column: targetColumn
+        })
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw Error(data.message || '\u6362\u7089\u5931\u8d25');
+      currentResult = data.result;
+      window.render();
+      $('moveDialog').close();
+      $('feedback').textContent = `\u5df2\u5c06\u68d2\u6599\u8c03\u6574\u5230 ${target} \u7089\u6307\u5b9a\u5217\u3002`;
+    } catch (error) {
+      $('feedback').textContent = `\u672a\u6362\u7089\uff1a${error.message}`;
+    }
+  };
+})();
+</script>
+<script>
+(() => {
+  const renderBeforeExport = window.render;
+  function addExportControl() {
+    let panel = document.getElementById('exportLoadingMapPanel');
+    if (!panel) {
+      panel = document.createElement('section');
+      panel.id = 'exportLoadingMapPanel';
+      panel.className = 'panel';
+      panel.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin:0 0 16px';
+      panel.innerHTML = '<span>\u5f53\u524d\u6392\u7089\u7ed3\u679c</span><button type="button">\u5bfc\u51fa\u88c5\u7089\u56fe</button>';
+      document.getElementById('furnaces').before(panel);
+      panel.querySelector('button').onclick = exportLoadingMap;
+    }
+  }
+
+  async function exportLoadingMap() {
+    if (!currentResult) return;
+    try {
+      $('feedback').textContent = '\u6b63\u5728\u751f\u6210\u88c5\u7089\u56fe\u2026';
+      const response = await fetch('/api/loading-plans/export', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({result: currentResult})
+      });
+      if (!response.ok) {
+        const data = await response.json();
+        throw Error(data.message || '\u5bfc\u51fa\u5931\u8d25');
+      }
+      const blob = await response.blob();
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = '锻造预热炉装炉图.xlsx';
+      link.click();
+      URL.revokeObjectURL(link.href);
+      $('feedback').textContent = '\u88c5\u7089\u56fe\u5df2\u751f\u6210\u3002';
+    } catch (error) {
+      $('feedback').textContent = `\u5bfc\u51fa\u5931\u8d25\uff1a${error.message}`;
+    }
+  }
+
+  window.render = function() {
+    renderBeforeExport();
+    addExportControl();
+  };
+})();
+</script>
+<script>
+(() => {
+  const renderWithExportPreview = window.render;
+
+  document.head.insertAdjacentHTML('beforeend', `<style>
+    #forgingPreviewDialog{width:min(1100px,calc(100% - 32px));max-height:calc(100vh - 32px)}
+    #forgingPreviewDialog .dialog-body{max-height:calc(100vh - 32px);display:flex;flex-direction:column}
+    .forging-preview-note{margin:0 0 12px;color:#60727e;font-size:12px}
+    .forging-preview-table{width:100%;border-collapse:collapse;font-size:12px}
+    .forging-preview-table th,.forging-preview-table td{padding:8px;border-bottom:1px solid #d6e1e6;text-align:left;white-space:nowrap}
+    .forging-preview-table th{position:sticky;top:0;background:#f3f6f7;color:#526976}
+    .forging-preview-table input{height:30px;min-width:190px}
+    .forging-preview-scroll{overflow:auto;border:1px solid #d6e1e6}
+    .preview-export-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
+    .preview-button{margin-right:8px;background:#ecf2f4;color:#294c5c;border:1px solid #cad8de}
+  </style>`);
+
+  function exportRows() {
+    const rows = [];
+    Object.entries(currentResult.furnaces).forEach(([furnaceId, furnace]) => {
+      if (furnace.spec.is_virtual) return;
+      furnace.columns.forEach((column, columnIndex) => column.items.forEach((item, itemIndex) => {
+        rows.push({ furnaceId, columnIndex, itemIndex, item });
+      }));
+    });
+    return rows;
+  }
+
+  function saveForgingNumbers(dialog) {
+    dialog.querySelectorAll('input[data-forging]').forEach(input => {
+      const { furnace, column, item } = input.dataset;
+      const target = currentResult.furnaces[furnace].columns[column].items[item];
+      target.forging_no = input.value.trim() || null;
+    });
+  }
+
+  function openForgingPreview(exportButton) {
+    let dialog = document.getElementById('forgingPreviewDialog');
+    if (!dialog) {
+      dialog = document.createElement('dialog');
+      dialog.id = 'forgingPreviewDialog';
+      document.body.append(dialog);
+    }
+    const rows = exportRows();
+    dialog.innerHTML = `<div class="dialog-body"><h2>导出预览：锻造号</h2><p class="forging-preview-note">此处仅修改导出显示。留空的项目会在装炉图中继续显示物料编码。</p><div class="forging-preview-scroll"><table class="forging-preview-table"><thead><tr><th>炉号</th><th>列</th><th>物料编码</th><th>锻造号</th><th>长度</th></tr></thead><tbody>${rows.map(row => `<tr><td>${esc(row.furnaceId)}</td><td>列${row.columnIndex + 1}</td><td>${esc(row.item.code)}</td><td><input data-forging data-furnace="${esc(row.furnaceId)}" data-column="${row.columnIndex}" data-item="${row.itemIndex}" value="${esc(row.item.forging_no || '')}" placeholder="${esc(row.item.code)}"></td><td>${row.item.height_mm || '待补'}mm</td></tr>`).join('')}</tbody></table></div><div class="preview-export-actions"><button class="secondary" type="button">取消</button><button type="button">确认并导出</button></div></div>`;
+    dialog.querySelector('.secondary').onclick = () => dialog.close();
+    dialog.querySelectorAll('button')[1].onclick = () => {
+      saveForgingNumbers(dialog);
+      dialog.close();
+      exportButton.click();
+    };
+    dialog.showModal();
+  }
+
+  function addForgingPreviewControl() {
+    const panel = document.getElementById('exportLoadingMapPanel');
+    if (!panel || panel.querySelector('.preview-button')) return;
+    const exportButton = panel.querySelector('button');
+    const previewButton = document.createElement('button');
+    previewButton.type = 'button';
+    previewButton.className = 'preview-button';
+    previewButton.textContent = '预览并修改锻造号';
+    previewButton.onclick = () => openForgingPreview(exportButton);
+    exportButton.before(previewButton);
+  }
+
+  window.render = function() {
+    renderWithExportPreview();
+    addForgingPreviewControl();
+  };
+})();
+</script></body></html>

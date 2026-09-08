@@ -1,0 +1,10 @@
+# Python 缓存
+__pycache__/
+*.py[cod]
+
+# 运行时数据（长度记忆等业务数据不入库）
+/data/*
+!/data/.gitkeep
+
+# 本地 IDE / 工具配置
+.claude/settings.local.json
