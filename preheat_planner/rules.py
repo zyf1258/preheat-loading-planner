@@ -16,8 +16,11 @@ RING_LIMIT = RING_HEIGHT * 3
 # 超过该高度的普通工件只用于标记“长料”，实际可排炉范围仍由炉体高度校验。
 LONG_THRESHOLD = 1000
 
-# 这个物料编码在 1407 炉有单独的有效列数规则。
-BOUND_CODE = "F2.6061.0001"
+# 大环物料编码。大环只进入 1406，且 1406 最多放置该数量，超出部分直接
+# 未分配；其余小环只使用 1407 / 1404，不会填充到其他炉子。该编码在
+# 1407 炉仍保留单独的有效列数规则（每层 9 根）。
+LARGE_RING_CODE = "F2.6061.0001"
+LARGE_RING_MAX_IN_1406 = 15
 
 # 物料编码末四位属于夜班料标识时，只能优先进入 1403 / 1410。
 NIGHT_CODES = ("0121", "0199", "0436")
@@ -40,7 +43,9 @@ FURNACES = (
     FurnaceSpec("1403", 6, 1600, "慢", 1.5, 14.0, "夜班炉", rod_total_length_mm=7800, power_kw=800),
     FurnaceSpec("1404", 6, 1600, "慢", 1.5, 12.0, "早班炉", is_ring=True, rod_total_length_mm=7800, power_kw=800),
     FurnaceSpec("1405", 6, 1900, "慢", 1.5, 9.4, "中班炉", rod_total_length_mm=7300, power_kw=1000),
-    FurnaceSpec("1406", 6, 1600, "中等", 1.35, 7.0, "环件主炉", is_ring=True, rod_total_length_mm=5600, power_kw=900),
+    # 1406 专装大环，最多 15 个（LARGE_RING_MAX_IN_1406）；棒料总长按
+    # 15 × 430mm 环件层高放开，否则会先于数量上限卡在 13 个。
+    FurnaceSpec("1406", 6, 1600, "中等", 1.35, 7.0, "环件主炉", is_ring=True, rod_total_length_mm=6450, power_kw=900),
     FurnaceSpec(
         "1407",
         6,
@@ -51,7 +56,9 @@ FURNACES = (
         "环件主炉（普通环件12根/层；F2.6061.0001为9根/层）",
         is_ring=True,
         ring_slots=12,
-        rod_total_length_mm=9200,
+        # 12 列 × 3 层 = 36 根环件；棒料总长按 36 × 430mm 放开，
+        # 否则会先于高度上限卡在 21 根。
+        rod_total_length_mm=15480,
         power_kw=1000,
     ),
     FurnaceSpec("1408", 4, 2200, "快", 1.25, 8.0, "950 / 5052 专炉", is_large=True, rod_total_length_mm=8700, power_kw=1200),
@@ -71,9 +78,10 @@ def normalize_furnace_id(value: object) -> str:
 
 
 __all__ = [
-    "BOUND_CODE",
     "FURNACES",
     "FURNACE_BY_ID",
+    "LARGE_RING_CODE",
+    "LARGE_RING_MAX_IN_1406",
     "LONG_THRESHOLD",
     "NIGHT_CODES",
     "PREHEAT_DELTA_C",

@@ -13,9 +13,10 @@ from typing import Iterable, Mapping
 
 from .models import FurnaceSpec, PreheatTimeResult
 from .rules import (
-    BOUND_CODE,
     FURNACES,
     FURNACE_BY_ID,
+    LARGE_RING_CODE,
+    LARGE_RING_MAX_IN_1406,
     LONG_THRESHOLD,
     NIGHT_CODES,
     PREHEAT_DELTA_C,
@@ -177,6 +178,8 @@ class LoadingEngine:
         # 1408 是 950 / 5052 专炉。第一次放入物料时锁定合金族，后续不同族的
         # 物料即使还有空间也不能混入，避免破坏现场的专炉规则。
         self._1408_alloy_family: str | None = None
+        # 大环只进 1406，这里单独记录 1406 已放的大环数量，用于数量上限校验。
+        self._1406_large_ring_count = 0
         for furnace in FURNACES:
             # 1407 对环件使用 ring_slots；其他炉子使用普通 slots。列对象中的
             # items 按炉底到炉顶保存，height_mm 是该列当前累计高度。
@@ -207,7 +210,7 @@ class LoadingEngine:
             return None
         if not item["is_ring"]:
             return 6
-        return 9 if item["code"] == BOUND_CODE else 12
+        return 9 if item["code"] == LARGE_RING_CODE else 12
 
     def _usable_columns(self, furnace_id: str, item: Mapping[str, object]) -> list[dict]:
         columns = self.columns[furnace_id]
@@ -262,11 +265,16 @@ class LoadingEngine:
         """尝试把一个工件放进指定炉子的某一列。
 
         这里集中执行所有“单件放置”时必须满足的硬约束：炉子是否允许使用、
-        1408 合金锁、棒料总长、单列高度。只有全部通过后才真正修改内部状态，
-        因此返回 ``False`` 时不会留下半条记录。
+        1406 只装大环且最多 15 个、1408 合金锁、棒料总长、单列高度。只有
+        全部通过后才真正修改内部状态，因此返回 ``False`` 时不会留下半条记录。
         """
 
         if furnace_id not in self._allowed_furnace_id_set:
+            return False
+        # 1406 只装大环：小环和普通料都不排入；大环也只进 1406，最多 15 个。
+        if furnace_id == "1406" and item["code"] != LARGE_RING_CODE:
+            return False
+        if item["code"] == LARGE_RING_CODE and self._1406_large_ring_count >= LARGE_RING_MAX_IN_1406:
             return False
         if furnace_id == "1408":
             family = self._alloy_family(item)
@@ -298,6 +306,8 @@ class LoadingEngine:
         self.rod_lengths[furnace_id] += rod_length
         if furnace_id == "1408":
             self._1408_alloy_family = self._alloy_family(item)
+        if item["code"] == LARGE_RING_CODE:
+            self._1406_large_ring_count += 1
         return True
 
     def _place_preferred(
@@ -372,14 +382,15 @@ class LoadingEngine:
         排炉顺序很重要：先处理限制最强、可选择炉子最少的工件，再处理可使用
         炉子较多的工件，能减少后续出现“有空间但没有合适炉子”的情况。
 
-        当前六个阶段分别是：
+        当前阶段分别是：
 
-        1. 环件进入 1406 / 1407 主炉；
-        2. 环件溢出部分尝试进入 1404；
-        3. 950 和 5052 料进入 1408，并建立合金锁；
-        4. 普通料按当前剩余列高分配；
-        5. 夜班料进入 1403 / 1410，必要时补入同族 1408；
-        6. 尚未安排的环件使用全炉群剩余空间。
+        1. 大环只进入 1406，最多 15 个，放不下的直接未分配；
+        2. 小环进入 1407 主炉；
+        3. 小环溢出部分尝试进入 1404；
+        4. 950 和 5052 料进入 1408，并建立合金锁；
+        5. 普通料按当前剩余列高分配；
+        6. 夜班料进入 1403 / 1410，必要时补入同族 1408；
+        7. 剩余小环不再填充其他炉子，直接记为未分配。
         """
         source_items = normalize_items(items)
         rings = [item for item in source_items if item["is_ring"]]
@@ -388,16 +399,22 @@ class LoadingEngine:
         normal = [item for item in normal if str(item["code"])[-4:] not in NIGHT_CODES]
         ring_overflow = []
 
-        # 1. 环件主炉按炉序尽量装满：1406，再 1407。
-        bound = [item for item in rings if item["code"] == BOUND_CODE]
-        rest_rings = [item for item in rings if item["code"] != BOUND_CODE]
-        for item in bound + sorted(rest_rings, key=lambda value: -value["quantity"]):
-            preferred = ["1406"] if item["code"] == BOUND_CODE else ["1406", "1407"]
+        # 1. 大环只进 1406，最多 15 个；放不下的大环不再溢出到其他炉子。
+        large_rings = [item for item in rings if item["code"] == LARGE_RING_CODE]
+        for item in large_rings:
             for _ in range(item["quantity"]):
-                if not self._place_preferred(preferred, item, RING_HEIGHT, "环件", ring=True):
+                if not self._place_preferred(["1406"], item, RING_HEIGHT, "环件", ring=True):
+                    reason = self._unassigned_reason(["1406"], "1406 大环容量不足")
+                    self._mark_unassigned(item, reason)
+
+        # 2. 小环进入 1407 主炉；1406 已专用于大环。
+        small_rings = [item for item in rings if item["code"] != LARGE_RING_CODE]
+        for item in sorted(small_rings, key=lambda value: -value["quantity"]):
+            for _ in range(item["quantity"]):
+                if not self._place_preferred(["1407"], item, RING_HEIGHT, "环件", ring=True):
                     ring_overflow.append(item)
 
-        # 2. 1404 共享环件和夜班料的剩余容量。
+        # 3. 1404 共享小环和夜班料的剩余容量。
         ring_units = list(ring_overflow)
         night_units = [item for item in night for _ in range(item["quantity"])]
         remaining_rings, remaining_night = [], list(night_units)
@@ -405,7 +422,7 @@ class LoadingEngine:
             if not self._place("1404", item, RING_HEIGHT, "环件", RING_LIMIT):
                 remaining_rings.append(item)
 
-        # 3. 1408 接收 950 / 5052，并锁定合金族，禁止 5052 与 6061 混装。
+        # 4. 1408 接收 950 / 5052，并锁定合金族，禁止 5052 与 6061 混装。
         dedicated = [
             item for item in normal
             if item["diameter_mm"] == 950 or self._alloy_family(item) == "5052"
@@ -417,7 +434,7 @@ class LoadingEngine:
                     reason = self._unassigned_reason(["1408"], "1408 合金锁定或炉容不足")
                     self._mark_unassigned(item, reason)
 
-        # 4. 普通料选择当前余量最合适的炉列。
+        # 5. 普通料选择当前余量最合适的炉列。
         for item in sorted(normal, key=lambda value: -value["height_mm"]):
             candidates = ["1409", "1404", "1405", "1411", "1408"]
             kind = "长料" if item["height_mm"] > LONG_THRESHOLD else "短料"
@@ -425,7 +442,7 @@ class LoadingEngine:
                 if not self._place_best(candidates, item, item["height_mm"], kind):
                     self._mark_unassigned(item, self._unassigned_reason(candidates, "炉高或炉容不足"))
 
-        # 5. 夜班料只能进入 1403 / 1410；同合金族可补入已锁定的 1408。
+        # 6. 夜班料只能进入 1403 / 1410；同合金族可补入已锁定的 1408。
         for item in remaining_night:
             candidates = ["1403", "1410"]
             if self._1408_alloy_family == self._alloy_family(item):
@@ -433,13 +450,10 @@ class LoadingEngine:
             if not self._place_best(candidates, item, item["height_mm"], "夜班料"):
                 self._mark_unassigned(item, self._unassigned_reason(candidates, "夜班料炉容不足"))
 
-        # 6. 其余环件使用全炉群剩余空间。
+        # 7. 剩余小环不再填充到其他炉子，直接进入未分配。
         for item in remaining_rings:
-            candidates = ["1409", "1410", "1411", "1403", "1405", "1408", "1406", "1404"]
-            if item["code"] != BOUND_CODE:
-                candidates.insert(6, "1407")
-            if not self._place_best(candidates, item, RING_HEIGHT, "环件填充", ring=True):
-                self._mark_unassigned(item, self._unassigned_reason(candidates, "全炉群容量不足"))
+            reason = self._unassigned_reason(["1406", "1407", "1404"], "环件炉容量不足")
+            self._mark_unassigned(item, reason)
 
         return self.result(source_items)
 
@@ -505,8 +519,8 @@ def iter_placed(result: Mapping[str, object]):
 
 
 __all__ = [
-    "BOUND_CODE",
     "FURNACES",
+    "LARGE_RING_CODE",
     "FurnaceSpec",
     "LONG_THRESHOLD",
     "LoadingEngine",
