@@ -78,6 +78,121 @@ def _export_border():
     return Border(left=side, right=side, top=side, bottom=side)
 
 
+def _export_title_border():
+    """创建炉号标题和时间框使用的中等边框。"""
+
+    from openpyxl.styles import Border, Side
+
+    side = Side(style="medium", color="777777")
+    return Border(left=side, right=side, top=side, bottom=side)
+
+
+def _export_merged_range_for_cell(sheet: Any, address: str):
+    """找到包含标题单元格的合并区域。"""
+
+    cell = sheet[address]
+    for merged_range in sheet.merged_cells.ranges:
+        if (
+            merged_range.min_row <= cell.row <= merged_range.max_row
+            and merged_range.min_col <= cell.column <= merged_range.max_col
+        ):
+            return merged_range
+    return None
+
+
+def _export_prepare_time_panels(sheet: Any, layouts: dict[str, dict[str, object]]) -> None:
+    """把每个炉号标题拆成“进炉时间｜炉号｜出炉时间”三块。
+
+    模板原本把整行标题合并为一个单元格。为了不改变炉位网格和右侧明细的
+    坐标，这里只拆分标题区域本身：两侧保留可手工填写的空框，中间继续
+    写入炉号、角色、重量和预热时间。时间数据当前没有来自排程结果的来源，
+    因此导出时故意留空，方便现场在 Excel 中补填。
+    """
+
+    from openpyxl.styles import Alignment
+
+    time_border = _export_title_border()
+    for layout in layouts.values():
+        title_address = str(layout["title"])
+        merged_range = _export_merged_range_for_cell(sheet, title_address)
+        if merged_range is None:
+            continue
+
+        min_row, max_row = merged_range.min_row, merged_range.max_row
+        min_col, max_col = merged_range.min_col, merged_range.max_col
+        source = sheet[title_address]
+        source_style = copy.copy(source._style)
+        source_fill = copy.copy(source.fill)
+        source_font = copy.copy(source.font)
+        sheet.unmerge_cells(str(merged_range))
+
+        # 先把原来的标题样式铺回整个区域，再分别覆盖两侧时间框样式。
+        for row in range(min_row, max_row + 1):
+            for column in range(min_col, max_col + 1):
+                cell = sheet.cell(row=row, column=column)
+                cell.value = None
+                cell._style = copy.copy(source_style)
+                cell.border = time_border
+
+        left_range = f"{sheet.cell(min_row, min_col).coordinate}:{sheet.cell(max_row, min_col).coordinate}"
+        right_range = f"{sheet.cell(min_row, max_col).coordinate}:{sheet.cell(max_row, max_col).coordinate}"
+        center_start_col = min_col + 1
+        center_end_col = max_col - 1
+
+        # 多行标题（1410、1411）需要把时间框纵向合并；普通标题只占一行。
+        if max_row > min_row:
+            sheet.merge_cells(left_range)
+            sheet.merge_cells(right_range)
+        if center_start_col <= center_end_col:
+            center_range = (
+                f"{sheet.cell(min_row, center_start_col).coordinate}:"
+                f"{sheet.cell(max_row, center_end_col).coordinate}"
+            )
+            if center_end_col > center_start_col or max_row > min_row:
+                sheet.merge_cells(center_range)
+        else:
+            center_range = None
+
+        left = sheet.cell(min_row, min_col)
+        right = sheet.cell(min_row, max_col)
+        side_font = copy.copy(source_font)
+        side_font.sz = min(float(side_font.sz or 11), 9)
+        side_font.bold = True
+        left.value = "进炉时间\n\n"
+        right.value = "出炉时间\n\n"
+        for side in (left, right):
+            side.fill = _export_fill("FFFFFF")
+            side.font = copy.copy(side_font)
+            side.alignment = Alignment(
+                wrap_text=True,
+                horizontal="center",
+                vertical="top",
+            )
+            side.border = time_border
+
+        # 让中间标题仍然使用原来的浅蓝底色和居中样式。
+        center = sheet.cell(min_row, center_start_col) if center_range else source
+        center.fill = copy.copy(source_fill)
+        center.font = copy.copy(source_font)
+        center.alignment = Alignment(
+            wrap_text=True,
+            horizontal="center",
+            vertical="center",
+        )
+        center.border = time_border
+        if max_row > min_row:
+            sheet.row_dimensions[min_row].height = max(
+                sheet.row_dimensions[min_row].height or 15,
+                75,
+            )
+            for row in range(min_row + 1, max_row + 1):
+                sheet.row_dimensions[row].height = max(
+                    sheet.row_dimensions[row].height or 15,
+                    18,
+                )
+        layout["title"] = center.coordinate
+
+
 def _export_item_text(item: dict) -> str:
     """取得左侧炉位格中显示的锻造号或物料编码。"""
 
@@ -351,6 +466,7 @@ def export_loading_map_with_openpyxl(result: dict, template_path: Path) -> bytes
         sheet["A3"] = f"导出时间：{datetime.now().strftime('%Y/%m/%d %H:%M:%S')}"
         sheet["G3"] = f"计划数量：{result.get('total_requested', 0)}　已装入：{result.get('total_placed', 0)}"
         layouts = _export_layouts()
+        _export_prepare_time_panels(sheet, layouts)
         grid_overflow = []
         item_border = _export_border()
 
@@ -368,7 +484,7 @@ def export_loading_map_with_openpyxl(result: dict, template_path: Path) -> bytes
             title_cell = sheet[layout["title"]]
             title_cell.value = _export_furnace_title(furnace_id, furnace)
             title_cell.alignment = Alignment(wrap_text=True, horizontal="center", vertical="center")
-            sheet.row_dimensions[title_cell.row].height = max(sheet.row_dimensions[title_cell.row].height or 15, 45)
+            sheet.row_dimensions[title_cell.row].height = max(sheet.row_dimensions[title_cell.row].height or 15, 60)
             for column_index, cell_addresses in enumerate(cells):
                 columns = furnace.get("columns") or []
                 items = columns[column_index].get("items", []) if column_index < len(columns) else []

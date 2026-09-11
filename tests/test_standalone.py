@@ -136,6 +136,23 @@ class LoadingMapExportTest(unittest.TestCase):
         self.assertEqual(sheet["S9"].value, "预估重量")
         self.assertEqual(sheet["S10"].value, 556.07)
 
+    def test_export_adds_entry_and_exit_time_panels_around_furnace_title(self):
+        result = _detail_result(
+            ("1403", False, [
+                _item("F3.6061.0201", "D30001-A", is_ring=False, height_mm=703),
+            ]),
+        )
+        template = Path(__file__).parents[1] / "legacy-planner" / "assets" / "锻造预热炉装炉图 v5.xlsx"
+
+        workbook_bytes = legacy_adapter.export_loading_map_with_openpyxl(result, template)
+        sheet = openpyxl.load_workbook(BytesIO(workbook_bytes))["预热炉装炉图"]
+
+        self.assertEqual(sheet["A13"].value, "进炉时间\n\n")
+        self.assertIn("1403", sheet["B13"].value)
+        self.assertEqual(sheet["C13"].value, "出炉时间\n\n")
+        merged_ranges = {str(value) for value in sheet.merged_cells.ranges}
+        self.assertNotIn("A13:C13", merged_ranges)
+
     def test_import_exported_map_restores_items_and_can_export_again(self):
         result = _detail_result(
             ("1404", True, [
